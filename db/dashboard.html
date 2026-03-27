@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Quant Strategy Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:       #04050a;
+    --surface:  #0c0f1a;
+    --border:   #1a2035;
+    --accent:   #00e5ff;
+    --accent2:  #ff6b35;
+    --green:    #00ff88;
+    --red:      #ff3b5c;
+    --muted:    #4a5568;
+    --text:     #e2e8f0;
+    --subtext:  #718096;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg, transparent, transparent 2px, rgba(0,229,255,.012) 2px, rgba(0,229,255,.012) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(135deg, #060910 0%, #0a0e1c 100%);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: 'Syne', sans-serif;
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,229,255,.5);
+  }
+
+  .logo span { color: var(--accent2); }
+
+  .header-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--subtext);
+    letter-spacing: 1px;
+  }
+
+  .pulse {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+
+  /* upload zone */
+  #upload-zone {
+    margin: 48px auto;
+    max-width: 480px;
+    border: 2px dashed var(--border);
+    border-radius: 4px;
+    padding: 48px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    position: relative;
+  }
+
+  #upload-zone:hover, #upload-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(0,229,255,.04);
+  }
+
+  #upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  #upload-zone .icon { font-size: 36px; margin-bottom: 12px; }
+  #upload-zone p { color: var(--subtext); line-height: 1.6; }
+  #upload-zone strong { color: var(--accent); }
+
+  /* main layout */
+  main {
+    display: none;
+    padding: 24px 32px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  main.visible { display: block; }
+
+  /* run selector */
+  .run-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+
+  .run-bar label { color: var(--subtext); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; }
+
+  select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    padding: 8px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    min-width: 300px;
+  }
+
+  select:focus { outline: 1px solid var(--accent); }
+
+  /* kpi grid */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+
+  .kpi::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity .2s;
+  }
+
+  .kpi:hover { border-color: var(--accent); }
+  .kpi:hover::before { opacity: 1; }
+
+  .kpi-label {
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--subtext);
+    margin-bottom: 8px;
+  }
+
+  .kpi-value {
+    font-family: 'Syne', sans-serif;
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--text);
+    line-height: 1;
+  }
+
+  .kpi-value.pos { color: var(--green); }
+  .kpi-value.neg { color: var(--red); }
+
+  .kpi-sub { font-size: 10px; color: var(--subtext); margin-top: 4px; }
+
+  /* charts */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 20px;
+  }
+
+  .chart-title {
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--subtext);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .chart-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .charts-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  canvas { max-width: 100%; }
+
+  /* trades table */
+  .table-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 20px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: 6px 12px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--subtext);
+    border-bottom: 1px solid var(--border);
+  }
+
+  tbody tr {
+    border-bottom: 1px solid rgba(26,32,53,.5);
+    transition: background .15s;
+  }
+
+  tbody tr:hover { background: rgba(0,229,255,.04); }
+
+  tbody td {
+    padding: 8px 12px;
+    color: var(--text);
+  }
+
+  .win { color: var(--green); }
+  .loss { color: var(--red); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 2px;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .badge.stop   { background: rgba(255,59,92,.15); color: var(--red); }
+  .badge.signal { background: rgba(0,229,255,.12); color: var(--accent); }
+  .badge.regime { background: rgba(255,107,53,.15); color: var(--accent2); }
+
+  /* runs leaderboard */
+  .lb-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr auto; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); align-items: center; font-size: 11px; }
+  .lb-row.header { color: var(--subtext); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+
+  .load-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 3px 10px;
+    border-radius: 2px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: background .15s;
+  }
+
+  .load-btn:hover { background: rgba(0,229,255,.12); }
+
+  .reload-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 6px 14px;
+    border-radius: 2px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: background .15s;
+    position: relative;
+  }
+  .reload-btn:hover { background: rgba(0,229,255,.12); }
+  .reload-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+
+  #loading {
+    text-align: center;
+    padding: 48px;
+    color: var(--subtext);
+    display: none;
+    font-size: 11px;
+    letter-spacing: 2px;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .6s linear infinite;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-state {
+    text-align: center;
+    padding: 32px;
+    color: var(--subtext);
+    font-size: 11px;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">QUANT<span>LAB</span> · DASHBOARD</div>
+  <div class="header-status">
+    <div class="pulse" id="status-dot"></div>
+    <span id="status-text">READY · DROP DB FILE</span>
+    <button class="reload-btn" id="reload-btn" style="display:none">
+      ↑ LOAD NEW DB
+      <input type="file" id="db-file-reload" accept=".db,.sqlite,.sqlite3"/>
+    </button>
+  </div>
+</header>
+
+<div id="upload-zone">
+  <input type="file" id="db-file" accept=".db,.sqlite,.sqlite3"/>
+  <div class="icon">🗄</div>
+  <p>Drop your <strong>quant.db</strong> SQLite file here<br/>or click to browse</p>
+  <p style="margin-top:12px;font-size:11px;color:var(--muted)">Generated by step1_backtest.py / step2_optimize.py</p>
+</div>
+
+<div id="loading"><span class="spinner"></span>LOADING DATABASE…</div>
+
+<main id="main">
+  <!-- run selector + leaderboard -->
+  <div class="run-bar">
+    <label>Active Run</label>
+    <select id="run-select"></select>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpi-grid" id="kpi-grid"></div>
+
+  <!-- equity + trade dist -->
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-title">Equity Curve</div>
+      <canvas id="equity-chart" height="220"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">P&amp;L Distribution</div>
+      <canvas id="pnl-chart" height="220"></canvas>
+    </div>
+  </div>
+
+  <!-- smaller charts row -->
+  <div class="charts-row">
+    <div class="chart-card">
+      <div class="chart-title">Exit Type Mix</div>
+      <canvas id="exit-chart" height="180"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Monthly Returns</div>
+      <canvas id="monthly-chart" height="180"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Drawdown</div>
+      <canvas id="dd-chart" height="180"></canvas>
+    </div>
+  </div>
+
+  <!-- trades table -->
+  <div class="table-card">
+    <div class="chart-title">Trade Log</div>
+    <table id="trades-table">
+      <thead>
+        <tr>
+          <th>#</th><th>Entry</th><th>Exit</th><th>Hold (d)</th>
+          <th>Entry $</th><th>Exit $</th><th>Shares</th><th>P&amp;L</th><th>Exit Type</th>
+        </tr>
+      </thead>
+      <tbody id="trades-body"></tbody>
+    </table>
+  </div>
+
+  <!-- all-runs leaderboard -->
+  <div class="chart-card">
+    <div class="chart-title">All Runs · Leaderboard</div>
+    <div id="leaderboard"></div>
+  </div>
+</main>
+
+<script>
+// ── helpers ──────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+let SQL, db, charts = {};
+
+function fmt(v, decimals=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toFixed(decimals);
+}
+function fmtPct(v) { return v == null || isNaN(v) ? '—' : (Number(v)*100).toFixed(2) + '%'; }
+function fmtCurrency(v) {
+  if (v == null || isNaN(v)) return '—';
+  return '$' + Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function days(a, b) {
+  return Math.round((new Date(b)-new Date(a))/(1000*60*60*24));
+}
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+function runQuery(sql, params=[]) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  const rows = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  stmt.free();
+  return rows;
+}
+
+// ── DB load ───────────────────────────────────────────────────────────────────
+async function loadDB(buffer) {
+  $('upload-zone').style.display = 'none';
+  $('loading').style.display = 'block';
+
+  if (!SQL) SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${f}` });
+  db = new SQL.Database(new Uint8Array(buffer));
+
+  $('loading').style.display = 'none';
+  $('main').classList.add('visible');
+  $('status-dot').style.background = 'var(--green)';
+  $('status-dot').style.boxShadow = '0 0 8px var(--green)';
+  $('reload-btn').style.display = 'inline-block';
+
+  populateRunSelect();
+  renderLeaderboard();
+}
+
+// ── run selector ──────────────────────────────────────────────────────────────
+function populateRunSelect() {
+  const runs = runQuery(`
+    SELECT r.run_id, r.ticker, r.fast, r.slow, r.atr_multiplier, r.risk_percentage,
+           r.created_at, m.sharpe, m.cagr
+    FROM runs r
+    LEFT JOIN metrics m ON m.run_id = r.run_id
+    ORDER BY r.created_at DESC
+  `);
+
+  const sel = $('run-select');
+  sel.innerHTML = '';
+  runs.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r.run_id;
+    opt.textContent =
+      `${r.ticker} | EMA${r.fast}/${r.slow} ATR×${r.atr_multiplier} R${(r.risk_percentage*100).toFixed(1)}% ` +
+      `| Sharpe ${fmt(r.sharpe)} CAGR ${fmtPct(r.cagr)} | ${r.created_at.slice(0,16)}`;
+    sel.appendChild(opt);
+  });
+  sel.addEventListener('change', () => loadRun(sel.value));
+  if (runs.length) loadRun(runs[0].run_id);
+  $('status-text', 'status-text').textContent = `${runs.length} RUN${runs.length!==1?'S':''} LOADED`;
+}
+
+// ── render one run ────────────────────────────────────────────────────────────
+function loadRun(runId) {
+  const [run]     = runQuery('SELECT * FROM runs WHERE run_id=?', [runId]);
+  const [m]       = runQuery('SELECT * FROM metrics WHERE run_id=?', [runId]);
+  const equity    = runQuery('SELECT date, equity_trade, equity_buyhold FROM equity WHERE run_id=? ORDER BY date', [runId]);
+  const trades    = runQuery('SELECT * FROM trades WHERE run_id=? ORDER BY entry_date', [runId]);
+
+  renderKPIs(run, m, equity);
+  renderEquityChart(equity);
+  renderPnlChart(trades);
+  renderExitChart(trades);
+  renderMonthlyChart(equity);
+  renderDrawdownChart(equity);
+  renderTradesTable(trades);
+}
+
+// ── KPIs ──────────────────────────────────────────────────────────────────────
+function renderKPIs(run, m, equity) {
+  const lastEq   = equity.length ? equity[equity.length-1].equity_trade : run.initial_capital;
+  const totalRet = (lastEq / run.initial_capital - 1);
+
+  const kpis = [
+    { label:'Total Return',    value: fmtPct(totalRet),          cls: totalRet>=0?'pos':'neg', sub: `$${Math.round(lastEq-run.initial_capital).toLocaleString()}` },
+    { label:'CAGR',            value: fmtPct(m?.cagr),           cls: (m?.cagr||0)>=0?'pos':'neg' },
+    { label:'Sharpe Ratio',    value: fmt(m?.sharpe),            cls: (m?.sharpe||0)>=1?'pos':(m?.sharpe||0)>=0?'':'neg' },
+    { label:'Max Drawdown',    value: fmtPct(m?.max_drawdown),   cls: 'neg' },
+    { label:'Volatility',      value: fmtPct(m?.volatility),     cls: '' },
+    { label:'Win Rate',        value: fmtPct(m?.win_rate),       cls: (m?.win_rate||0)>=0.5?'pos':'' },
+    { label:'Profit Factor',   value: fmt(m?.profit_factor),     cls: (m?.profit_factor||0)>=1?'pos':'neg' },
+    { label:'Total Trades',    value: m?.total_trades??'—',      cls: '' },
+    { label:'Avg Hold (days)', value: fmt(m?.avg_hold_days,1),   cls: '' },
+    { label:'EMA Fast/Slow',   value: `${run.fast}/${run.slow}`, cls: '' },
+    { label:'ATR ×',           value: run.atr_multiplier,        cls: '' },
+    { label:'Risk %',          value: fmtPct(run.risk_percentage), cls: '' },
+  ];
+
+  $('kpi-grid').innerHTML = kpis.map(k => `
+    <div class="kpi">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value ${k.cls}">${k.value}</div>
+      ${k.sub ? `<div class="kpi-sub">${k.sub}</div>` : ''}
+    </div>`).join('');
+}
+
+// ── equity chart ──────────────────────────────────────────────────────────────
+function renderEquityChart(equity) {
+  destroyChart('equity');
+  const labels = equity.map(r => r.date.slice(0,10));
+  const strat  = equity.map(r => r.equity_trade);
+  const bnh    = equity.map(r => r.equity_buyhold);
+
+  charts.equity = new Chart($('equity-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Strategy', data: strat, borderColor: '#00e5ff', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.1 },
+        { label: 'Buy & Hold', data: bnh, borderColor: '#ff6b35', borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0.1, borderDash: [4,4] },
+      ]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#718096', font: { family: 'Space Mono', size: 11 }, boxWidth: 20 } },
+        tooltip: { backgroundColor: '#0c0f1a', borderColor: '#1a2035', borderWidth: 1, titleColor: '#e2e8f0', bodyColor: '#718096', titleFont: { family: 'Space Mono' } }
+      },
+      scales: {
+        x: { ticks: { color: '#4a5568', maxRotation: 0, maxTicksLimit: 8, font: { family: 'Space Mono', size: 10 } }, grid: { color: '#0f1422' } },
+        y: { ticks: { color: '#4a5568', font: { family: 'Space Mono', size: 10 }, callback: v => '$'+Math.round(v/1000)+'k' }, grid: { color: '#0f1422' } }
+      }
+    }
+  });
+}
+
+// ── P&L histogram ─────────────────────────────────────────────────────────────
+function renderPnlChart(trades) {
+  destroyChart('pnl');
+  if (!trades.length) { $('pnl-chart').style.opacity='.3'; return; }
+
+  const pnls = trades.map(t => +t.pnl).filter(v => !isNaN(v));
+  const min  = Math.min(...pnls), max = Math.max(...pnls);
+  const bins = 20;
+  const step = (max - min) / bins || 1;
+  const counts = new Array(bins).fill(0);
+  const colors = [];
+
+  pnls.forEach(v => {
+    const i = Math.min(Math.floor((v - min) / step), bins - 1);
+    counts[i]++;
+  });
+
+  const labels = counts.map((_, i) => `$${Math.round(min + i * step)}`);
+  const midpoints = counts.map((_, i) => min + (i + 0.5) * step);
+  midpoints.forEach(m => colors.push(m >= 0 ? 'rgba(0,255,136,.7)' : 'rgba(255,59,92,.7)'));
+
+  charts.pnl = new Chart($('pnl-chart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data: counts, backgroundColor: colors, borderWidth: 0 }] },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#4a5568', maxRotation: 45, font: { size: 9, family:'Space Mono' } }, grid: { display: false } },
+        y: { ticks: { color: '#4a5568', font: { size: 10, family:'Space Mono' } }, grid: { color: '#0f1422' } }
+      }
+    }
+  });
+}
+
+// ── exit type donut ───────────────────────────────────────────────────────────
+function renderExitChart(trades) {
+  destroyChart('exit');
+  const counts = {};
+  trades.forEach(t => { counts[t.exit_type] = (counts[t.exit_type]||0) + 1; });
+  const labels = Object.keys(counts);
+  const data   = labels.map(l => counts[l]);
+  const colors = labels.map(l => l==='stop'?'rgba(255,59,92,.8)': l==='signal'?'rgba(0,229,255,.8)':'rgba(255,107,53,.8)');
+
+  charts.exit = new Chart($('exit-chart'), {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0 }] },
+    options: {
+      responsive: true,
+      animation: false,
+      cutout: '65%',
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#718096', font: { family:'Space Mono', size: 10 }, boxWidth: 12 } }
+      }
+    }
+  });
+}
+
+// ── monthly returns bar ───────────────────────────────────────────────────────
+function renderMonthlyChart(equity) {
+  destroyChart('monthly');
+  const monthly = {};
+  for (let i = 1; i < equity.length; i++) {
+    const month = equity[i].date.slice(0, 7);
+    const prev  = equity[i-1].equity_trade;
+    const curr  = equity[i].equity_trade;
+    if (!monthly[month]) monthly[month] = { open: prev, close: curr };
+    else monthly[month].close = curr;
+  }
+  const labels = Object.keys(monthly).sort();
+  const data   = labels.map(m => ((monthly[m].close / monthly[m].open) - 1) * 100);
+  const colors = data.map(v => v >= 0 ? 'rgba(0,255,136,.7)' : 'rgba(255,59,92,.7)');
+
+  charts.monthly = new Chart($('monthly-chart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0 }] },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#4a5568', maxRotation: 90, font: { size: 8, family:'Space Mono' } }, grid: { display: false } },
+        y: { ticks: { color: '#4a5568', font: { size: 10, family:'Space Mono' }, callback: v => v+'%' }, grid: { color: '#0f1422' } }
+      }
+    }
+  });
+}
+
+// ── drawdown ──────────────────────────────────────────────────────────────────
+function renderDrawdownChart(equity) {
+  destroyChart('dd');
+  let peak = -Infinity;
+  const labels = [], data = [];
+  equity.forEach(r => {
+    if (r.equity_trade > peak) peak = r.equity_trade;
+    labels.push(r.date.slice(0,10));
+    data.push(peak > 0 ? ((r.equity_trade / peak) - 1) * 100 : 0);
+  });
+
+  charts.dd = new Chart($('dd-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data,
+        borderColor: 'rgba(255,59,92,.8)',
+        borderWidth: 1,
+        pointRadius: 0,
+        fill: { target: 'origin', above: 'rgba(255,59,92,.0)', below: 'rgba(255,59,92,.15)' },
+        tension: 0.1
+      }]
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#4a5568', maxRotation: 0, maxTicksLimit: 6, font: { size: 9, family:'Space Mono' } }, grid: { color: '#0f1422' } },
+        y: { ticks: { color: '#4a5568', font: { size: 10, family:'Space Mono' }, callback: v => v+'%' }, grid: { color: '#0f1422' } }
+      }
+    }
+  });
+}
+
+// ── trades table ──────────────────────────────────────────────────────────────
+function renderTradesTable(trades) {
+  const tbody = $('trades-body');
+  if (!trades.length) { tbody.innerHTML = `<tr><td colspan="9" class="empty-state">NO TRADES IN THIS RUN</td></tr>`; return; }
+
+  tbody.innerHTML = trades.map((t, i) => {
+    const pnl = +t.pnl;
+    const cls = pnl >= 0 ? 'win' : 'loss';
+    const hold = t.entry_date && t.exit_date ? days(t.entry_date, t.exit_date) : '—';
+    return `<tr>
+      <td style="color:var(--subtext)">${i+1}</td>
+      <td>${t.entry_date?.slice(0,10)??'—'}</td>
+      <td>${t.exit_date?.slice(0,10)??'—'}</td>
+      <td style="color:var(--subtext)">${hold}</td>
+      <td>${fmtCurrency(t.entry_price)}</td>
+      <td>${fmtCurrency(t.exit_price)}</td>
+      <td style="color:var(--subtext)">${t.shares??'—'}</td>
+      <td class="${cls}">${fmtCurrency(pnl)}</td>
+      <td><span class="badge ${t.exit_type}">${t.exit_type??'—'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── leaderboard ───────────────────────────────────────────────────────────────
+function renderLeaderboard() {
+  const rows = runQuery(`
+    SELECT r.run_id, r.ticker, r.fast, r.slow, r.atr_multiplier, r.risk_percentage,
+           m.sharpe, m.cagr, m.max_drawdown, m.win_rate, m.total_trades
+    FROM runs r
+    LEFT JOIN metrics m ON m.run_id = r.run_id
+    ORDER BY m.sharpe DESC NULLS LAST
+    LIMIT 50
+  `);
+
+  const lb = $('leaderboard');
+  lb.innerHTML = `
+    <div class="lb-row header">
+      <span>Params</span><span>CAGR</span><span>Sharpe</span><span>Max DD</span><span>Win Rate / Trades</span><span></span>
+    </div>
+    ${rows.map(r => `
+      <div class="lb-row">
+        <span style="color:var(--subtext)">${r.ticker} E${r.fast}/${r.slow} A×${r.atr_multiplier} R${(r.risk_percentage*100).toFixed(1)}%</span>
+        <span class="${(r.cagr||0)>=0?'win':'loss'}">${fmtPct(r.cagr)}</span>
+        <span style="color:var(--accent)">${fmt(r.sharpe)}</span>
+        <span class="loss">${fmtPct(r.max_drawdown)}</span>
+        <span style="color:var(--subtext)">${fmtPct(r.win_rate)} / ${r.total_trades??0}</span>
+        <button class="load-btn" onclick="loadRun('${r.run_id}');$('run-select').value='${r.run_id}'">LOAD</button>
+      </div>`).join('')}
+  `;
+}
+
+// ── file input ────────────────────────────────────────────────────────────────
+$('db-file').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $('status-text').textContent = `LOADING ${file.name.toUpperCase()}…`;
+  const reader = new FileReader();
+  reader.onload = ev => loadDB(ev.target.result);
+  reader.readAsArrayBuffer(file);
+});
+
+$('db-file-reload').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $('status-text').textContent = `LOADING ${file.name.toUpperCase()}…`;
+  const reader = new FileReader();
+  reader.onload = ev => loadDB(ev.target.result);
+  reader.readAsArrayBuffer(file);
+});
+
+const zone = $('upload-zone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  $('status-text').textContent = `LOADING ${file.name.toUpperCase()}…`;
+  const reader = new FileReader();
+  reader.onload = ev => loadDB(ev.target.result);
+  reader.readAsArrayBuffer(file);
+});
+</script>
+</body>
+</html>
